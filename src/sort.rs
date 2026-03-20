@@ -10,13 +10,11 @@ use clap::Parser;
 #[derive(Parser)]
 #[command(about = "Dateien sortieren und Projektordner schützen")]
 pub(crate) struct Cli {
-    /// Quellordner zum Durchsuchen
+
     pub(crate) source: PathBuf,
 
-    /// Zielordner (Basis) – darf NICHT im Quellordner liegen
     pub(crate) dest: PathBuf,
 
-    /// Nur anzeigen, nichts wirklich verschieben
     #[arg(long)]
     pub(crate) dry_run: bool,
 }
@@ -81,7 +79,7 @@ pub(crate) fn is_project_dir(dir: &Path) -> bool {
 
 // ── Fix #2: Ancestor-Prüfung ─────────────────────────────────────────────────
 pub(crate) fn is_ancestor_of(potential_ancestor: &Path, path: &Path) -> bool {
-    // Canonicalize um Symlinks / .. aufzulösen
+   
     let Ok(ancestor) = potential_ancestor.canonicalize() else { return false };
     let Ok(child) = path.canonicalize()               else { return false };
     child.starts_with(&ancestor)
@@ -90,9 +88,9 @@ pub(crate) fn is_ancestor_of(potential_ancestor: &Path, path: &Path) -> bool {
 // ── Sortierer ────────────────────────────────────────────────────────────────
 pub(crate) struct Sorter {
     source: PathBuf,
-    // Alle Zielordner als Vec – einfach erweiterbar
+   
     dest_dirs: Vec<PathBuf>,
-    // Ziel je Kategorie
+   
     dest_images: PathBuf,
     dest_documents: PathBuf,
     dest_videos: PathBuf,
@@ -115,7 +113,7 @@ impl Sorter {
         let dest_projects = mk("projekte");
         let dest_unknown = mk("sonstiges");
 
-        // Alle Zielordner sammeln für den Ancestor-Check
+       
         let dest_dirs = vec![
             dest_images.clone(), dest_documents.clone(), dest_videos.clone(),
             dest_audio.clone(), dest_archives.clone(), dest_projects.clone(),
@@ -141,7 +139,7 @@ pub(crate) fn run(&mut self) {
         self.scan(&source);
     }
 pub(crate) fn scan(&mut self, dir: &Path) {
-        // Fix #2: Zielordner niemals selbst scannen
+       
         for dest in &self.dest_dirs {
             if is_ancestor_of(dest, dir) {
                 info!("Zielordner übersprungen: {:?}", dir);
@@ -166,13 +164,13 @@ pub(crate) fn scan(&mut self, dir: &Path) {
                 }
             };
 
-            // Symlink überspringen
+           
             if meta.file_type().is_symlink() {
                 warn!("Symlink übersprungen: {:?}", entry.path());
                 continue;
             }
 
-            // Inode-Check
+           
             #[cfg(unix)] {
                 use std::os::unix::fs::MetadataExt;
                 if !self.visited.insert(meta.ino()) {
@@ -187,7 +185,7 @@ pub(crate) fn scan(&mut self, dir: &Path) {
                 if is_project_dir(&path) {
                     let relative = path.strip_prefix(&self.source).unwrap();
                     let dest = self.dest_projects.join(relative);
-                    // Fix #3: Ordner verschieben, nicht Datei entfernen
+                   
                     self.move_dir(&path, &dest);
                 } else {
                     self.scan(&path);
@@ -214,7 +212,7 @@ pub(crate) fn move_file(&self, src: &Path, dest: &Path) {
         }
         self.ensure_parent(dest);
         if let Err(_) = fs::rename(src, dest) {
-            // Cross-device: kopieren + löschen
+           
             match fs::copy(src, dest) {
                 Ok(_) => {
                     if let Err(e) = fs::remove_file(src) {
@@ -230,7 +228,7 @@ pub(crate) fn move_file(&self, src: &Path, dest: &Path) {
         }
     }
 
-    // Fix #3: Eigene Funktion für Verzeichnisse
+   
 pub(crate) fn move_dir(&self, src: &Path, dest: &Path) {
         if self.dry_run {
             println!("[DRY-RUN] Projekt: {:?}  →  {:?}", src, dest);
@@ -239,26 +237,26 @@ pub(crate) fn move_dir(&self, src: &Path, dest: &Path) {
         self.ensure_parent(dest);
 
         if let Err(_) = fs::rename(src, dest) {
-            // Erst in temporären Ordner kopieren (gleiche Partition wie Ziel)
-            // Dann atomar umbenennen – so liegt nie ein halbfertiger Ordner am Ziel
+           
+           
             let staging = dest.with_extension("__tmp");
 
             match copy_dir_recursive(src, &staging) {
                 Ok(_) => {
-                    // rename von staging → dest ist atomar (gleiche Partition)
+                   
                     if let Err(e) = fs::rename(&staging, dest) {
                         error!("Staging-rename fehlgeschlagen {:?}: {}", dest, e);
-                        fs::remove_dir_all(&staging).ok(); // staging aufräumen
+                        fs::remove_dir_all(&staging).ok();
                         return;
                     }
-                    // Erst jetzt Original entfernen – Ziel ist garantiert vollständig
+                   
                     if let Err(e) = fs::remove_dir_all(src) {
                         error!("Quelle nicht löschbar {:?}: {}", src, e);
                     }
                 }
                 Err(e) => {
                     error!("Staging-Kopie fehlgeschlagen {:?}: {}", src, e);
-                    fs::remove_dir_all(&staging).ok(); // halbfertiges staging aufräumen
+                    fs::remove_dir_all(&staging).ok();
                 }
             }
         } else {
@@ -288,13 +286,13 @@ pub(crate) fn copy_dir_recursive(src: &Path, dest: &Path) -> std::io::Result<()>
         } else {
             fs::copy(&src_path, &dest_path)?;
 
-            // Berechtigungen übertragen (Unix-only, für .git / node_modules wichtig)
+           
             #[cfg(unix)]
             fs::set_permissions(&dest_path, meta.permissions())?;
         }
     }
 
-    // Verzeichnis-Permissions ebenfalls übertragen
+   
     #[cfg(unix)]
     fs::set_permissions(dest, fs::metadata(src)?.permissions())?;
 
