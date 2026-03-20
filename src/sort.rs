@@ -1,4 +1,4 @@
-// src/main.rs
+// src/sort.rs
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -77,20 +77,54 @@ pub(crate) fn is_project_dir(dir: &Path) -> bool {
     false
 }
 
-// ── Fix #2: Ancestor-Prüfung ─────────────────────────────────────────────────
+// ── Ancestor-Prüfung ─────────────────────────────────────────────────────────
 pub(crate) fn is_ancestor_of(potential_ancestor: &Path, path: &Path) -> bool {
-   
     let Ok(ancestor) = potential_ancestor.canonicalize() else { return false };
-    let Ok(child) = path.canonicalize()               else { return false };
+    let Ok(child)    = path.canonicalize()               else { return false };
     child.starts_with(&ancestor)
+}
+
+// ── Kollisionsauflösung ───────────────────────────────────────────────────────
+//
+// Gibt einen freien Pfad zurück. Falls `desired` noch nicht existiert, wird
+// er unverändert zurückgegeben. Andernfalls wird ein Zähler angehängt:
+//
+//   foto.jpg  →  foto(1).jpg  →  foto(2).jpg  →  …
+//   mein-projekt  →  mein-projekt(1)  →  …
+//
+pub(crate) fn resolve_collision(desired: &Path) -> PathBuf {
+    if !desired.exists() {
+        return desired.to_path_buf();
+    }
+
+    // Stem und Extension für Dateien trennen; für Ordner gibt es keine Extension.
+    let stem = desired
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let ext = desired
+        .extension()
+        .map(|e| format!(".{}", e.to_string_lossy()))
+        .unwrap_or_default();
+    let parent = desired.parent().unwrap_or(Path::new("."));
+
+    let mut counter: u32 = 1;
+    loop {
+        let candidate_name = format!("{}({}){}", stem, counter, ext);
+        let candidate = parent.join(&candidate_name);
+        if !candidate.exists() {
+            return candidate;
+        }
+        counter += 1;
+    }
 }
 
 // ── Sortierer ────────────────────────────────────────────────────────────────
 pub(crate) struct Sorter {
     source: PathBuf,
-   
+
     dest_dirs: Vec<PathBuf>,
-   
+
     dest_images: PathBuf,
     dest_documents: PathBuf,
     dest_videos: PathBuf,
@@ -105,15 +139,14 @@ pub(crate) struct Sorter {
 impl Sorter {
     pub(crate) fn new(source: PathBuf, dest: PathBuf, dry_run: bool) -> Self {
         let mk = |name: &str| dest.join(name);
-        let dest_images = mk("bilder");
+        let dest_images    = mk("bilder");
         let dest_documents = mk("dokumente");
-        let dest_videos = mk("videos");
-        let dest_audio = mk("audio");
-        let dest_archives = mk("archive");
-        let dest_projects = mk("projekte");
-        let dest_unknown = mk("sonstiges");
+        let dest_videos    = mk("videos");
+        let dest_audio     = mk("audio");
+        let dest_archives  = mk("archive");
+        let dest_projects  = mk("projekte");
+        let dest_unknown   = mk("sonstiges");
 
-       
         let dest_dirs = vec![
             dest_images.clone(), dest_documents.clone(), dest_videos.clone(),
             dest_audio.clone(), dest_archives.clone(), dest_projects.clone(),
@@ -134,12 +167,13 @@ impl Sorter {
             dry_run,
         }
     }
-pub(crate) fn run(&mut self) {
+
+    pub(crate) fn run(&mut self) {
         let source = self.source.clone();
         self.scan(&source);
     }
-pub(crate) fn scan(&mut self, dir: &Path) {
-       
+
+    pub(crate) fn scan(&mut self, dir: &Path) {
         for dest in &self.dest_dirs {
             if is_ancestor_of(dest, dir) {
                 info!("Zielordner übersprungen: {:?}", dir);
@@ -164,13 +198,11 @@ pub(crate) fn scan(&mut self, dir: &Path) {
                 }
             };
 
-           
             if meta.file_type().is_symlink() {
                 warn!("Symlink übersprungen: {:?}", entry.path());
                 continue;
             }
 
-           
             #[cfg(unix)] {
                 use std::os::unix::fs::MetadataExt;
                 if !self.visited.insert(meta.ino()) {
@@ -185,7 +217,8 @@ pub(crate) fn scan(&mut self, dir: &Path) {
                 if is_project_dir(&path) {
                     let relative = path.strip_prefix(&self.source).unwrap();
                     let dest = self.dest_projects.join(relative);
-                   
+                    // Kollision auflösen bevor verschoben wird
+                    let dest = resolve_collision(&dest);
                     self.move_dir(&path, &dest);
                 } else {
                     self.scan(&path);
@@ -193,26 +226,29 @@ pub(crate) fn scan(&mut self, dir: &Path) {
             } else {
                 let relative = path.strip_prefix(&self.source).unwrap();
                 let dest_base = match categorize(&path) {
-                    FileCategory::Image => &self.dest_images,
+                    FileCategory::Image    => &self.dest_images,
                     FileCategory::Document => &self.dest_documents,
-                    FileCategory::Video => &self.dest_videos,
-                    FileCategory::Audio => &self.dest_audio,
-                    FileCategory::Archive => &self.dest_archives,
-                    FileCategory::Unknown => &self.dest_unknown,
+                    FileCategory::Video    => &self.dest_videos,
+                    FileCategory::Audio    => &self.dest_audio,
+                    FileCategory::Archive  => &self.dest_archives,
+                    FileCategory::Unknown  => &self.dest_unknown,
                 };
                 let dest = dest_base.join(relative);
+                // Kollision auflösen bevor verschoben wird
+                let dest = resolve_collision(&dest);
                 self.move_file(&path, &dest);
             }
         }
     }
-pub(crate) fn move_file(&self, src: &Path, dest: &Path) {
+
+    pub(crate) fn move_file(&self, src: &Path, dest: &Path) {
         if self.dry_run {
             println!("[DRY-RUN] Datei: {:?}  →  {:?}", src, dest);
             return;
         }
         self.ensure_parent(dest);
         if let Err(_) = fs::rename(src, dest) {
-           
+            // cross-device: kopieren + löschen
             match fs::copy(src, dest) {
                 Ok(_) => {
                     if let Err(e) = fs::remove_file(src) {
@@ -228,8 +264,7 @@ pub(crate) fn move_file(&self, src: &Path, dest: &Path) {
         }
     }
 
-   
-pub(crate) fn move_dir(&self, src: &Path, dest: &Path) {
+    pub(crate) fn move_dir(&self, src: &Path, dest: &Path) {
         if self.dry_run {
             println!("[DRY-RUN] Projekt: {:?}  →  {:?}", src, dest);
             return;
@@ -237,19 +272,16 @@ pub(crate) fn move_dir(&self, src: &Path, dest: &Path) {
         self.ensure_parent(dest);
 
         if let Err(_) = fs::rename(src, dest) {
-           
-           
+            // cross-device: staging-Kopie
             let staging = dest.with_extension("__tmp");
 
             match copy_dir_recursive(src, &staging) {
                 Ok(_) => {
-                   
                     if let Err(e) = fs::rename(&staging, dest) {
                         error!("Staging-rename fehlgeschlagen {:?}: {}", dest, e);
                         fs::remove_dir_all(&staging).ok();
                         return;
                     }
-                   
                     if let Err(e) = fs::remove_dir_all(src) {
                         error!("Quelle nicht löschbar {:?}: {}", src, e);
                     }
@@ -263,7 +295,8 @@ pub(crate) fn move_dir(&self, src: &Path, dest: &Path) {
             info!("Projekt verschoben: {:?} → {:?}", src, dest);
         }
     }
-pub(crate) fn ensure_parent(&self, path: &Path) {
+
+    pub(crate) fn ensure_parent(&self, path: &Path) {
         if let Some(parent) = path.parent() {
             if let Err(e) = fs::create_dir_all(parent) {
                 error!("Ordner anlegen fehlgeschlagen {:?}: {}", parent, e);
@@ -272,30 +305,27 @@ pub(crate) fn ensure_parent(&self, path: &Path) {
     }
 }
 
-// Rekursive Kopie für cross-device Projektordner
+// ── Rekursive Kopie für cross-device Projektordner ────────────────────────────
 pub(crate) fn copy_dir_recursive(src: &Path, dest: &Path) -> std::io::Result<()> {
     fs::create_dir_all(dest)?;
 
     for entry in fs::read_dir(src)?.flatten() {
-        let src_path = entry.path();
+        let src_path  = entry.path();
         let dest_path = dest.join(entry.file_name());
-        let meta = entry.metadata()?;
+        let meta      = entry.metadata()?;
 
         if meta.is_dir() {
             copy_dir_recursive(&src_path, &dest_path)?;
         } else {
             fs::copy(&src_path, &dest_path)?;
 
-           
             #[cfg(unix)]
             fs::set_permissions(&dest_path, meta.permissions())?;
         }
     }
 
-   
     #[cfg(unix)]
     fs::set_permissions(dest, fs::metadata(src)?.permissions())?;
 
     Ok(())
 }
-
