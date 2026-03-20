@@ -13,8 +13,8 @@ fn main() {
         std::process::exit(1);
     }
 
-    // Fix canonicalize()-Edge-Case: Zielordner muss existieren bevor
-    // is_ancestor_of() aufgerufen wird, sonst schlägt canonicalize() fehl
+
+
     if let Err(e) = fs::create_dir_all(&cli.dest) {
         error!("Zielordner kann nicht angelegt werden {:?}: {}", cli.dest, e);
         std::process::exit(1);
