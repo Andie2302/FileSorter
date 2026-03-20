@@ -9,7 +9,7 @@ use clap::Parser;
 
 #[derive(Parser)]
 #[command(about = "Dateien sortieren und Projektordner schützen")]
-pub struct Cli {
+pub(crate) struct Cli {
     /// Quellordner zum Durchsuchen
     pub(crate) source: PathBuf,
 
@@ -22,7 +22,7 @@ pub struct Cli {
 }
 
 // ── Dateikategorien ──────────────────────────────────────────────────────────
-pub enum FileCategory {
+pub(crate) enum FileCategory {
     Image,
     Document,
     Video,
@@ -30,7 +30,7 @@ pub enum FileCategory {
     Archive,
     Unknown,
 }
-pub fn categorize(path: &Path) -> FileCategory {
+pub(crate) fn categorize(path: &Path) -> FileCategory {
     if let Ok(Some(kind)) = infer::get_from_path(path) {
         return match kind.mime_type() {
             m if m.starts_with("image/") => FileCategory::Image,
@@ -53,7 +53,7 @@ pub fn categorize(path: &Path) -> FileCategory {
 }
 
 // ── Projektschutz ────────────────────────────────────────────────────────────
-pub fn is_project_dir(dir: &Path) -> bool {
+pub(crate) fn is_project_dir(dir: &Path) -> bool {
     let file_markers = [
         "Cargo.toml", "go.mod", "package.json",
         "pyproject.toml", "setup.py", "pom.xml", "build.gradle",
@@ -80,7 +80,7 @@ pub fn is_project_dir(dir: &Path) -> bool {
 }
 
 // ── Fix #2: Ancestor-Prüfung ─────────────────────────────────────────────────
-pub fn is_ancestor_of(potential_ancestor: &Path, path: &Path) -> bool {
+pub(crate) fn is_ancestor_of(potential_ancestor: &Path, path: &Path) -> bool {
     // Canonicalize um Symlinks / .. aufzulösen
     let Ok(ancestor) = potential_ancestor.canonicalize() else { return false };
     let Ok(child) = path.canonicalize()               else { return false };
@@ -88,8 +88,7 @@ pub fn is_ancestor_of(potential_ancestor: &Path, path: &Path) -> bool {
 }
 
 // ── Sortierer ────────────────────────────────────────────────────────────────
-
-pub struct Sorter {
+pub(crate) struct Sorter {
     source: PathBuf,
     // Alle Zielordner als Vec – einfach erweiterbar
     dest_dirs: Vec<PathBuf>,
@@ -104,6 +103,7 @@ pub struct Sorter {
     visited: HashSet<u64>,
     dry_run: bool,
 }
+
 impl Sorter {
     pub(crate) fn new(source: PathBuf, dest: PathBuf, dry_run: bool) -> Self {
         let mk = |name: &str| dest.join(name);
@@ -136,12 +136,11 @@ impl Sorter {
             dry_run,
         }
     }
-
-    pub fn run(&mut self) {
+pub(crate) fn run(&mut self) {
         let source = self.source.clone();
         self.scan(&source);
     }
-pub fn scan(&mut self, dir: &Path) {
+pub(crate) fn scan(&mut self, dir: &Path) {
         // Fix #2: Zielordner niemals selbst scannen
         for dest in &self.dest_dirs {
             if is_ancestor_of(dest, dir) {
@@ -208,7 +207,7 @@ pub fn scan(&mut self, dir: &Path) {
             }
         }
     }
-pub fn move_file(&self, src: &Path, dest: &Path) {
+pub(crate) fn move_file(&self, src: &Path, dest: &Path) {
         if self.dry_run {
             println!("[DRY-RUN] Datei: {:?}  →  {:?}", src, dest);
             return;
@@ -232,7 +231,7 @@ pub fn move_file(&self, src: &Path, dest: &Path) {
     }
 
     // Fix #3: Eigene Funktion für Verzeichnisse
-pub fn move_dir(&self, src: &Path, dest: &Path) {
+pub(crate) fn move_dir(&self, src: &Path, dest: &Path) {
         if self.dry_run {
             println!("[DRY-RUN] Projekt: {:?}  →  {:?}", src, dest);
             return;
@@ -266,7 +265,7 @@ pub fn move_dir(&self, src: &Path, dest: &Path) {
             info!("Projekt verschoben: {:?} → {:?}", src, dest);
         }
     }
-pub fn ensure_parent(&self, path: &Path) {
+pub(crate) fn ensure_parent(&self, path: &Path) {
         if let Some(parent) = path.parent() {
             if let Err(e) = fs::create_dir_all(parent) {
                 error!("Ordner anlegen fehlgeschlagen {:?}: {}", parent, e);
@@ -276,7 +275,7 @@ pub fn ensure_parent(&self, path: &Path) {
 }
 
 // Rekursive Kopie für cross-device Projektordner
-pub fn copy_dir_recursive(src: &Path, dest: &Path) -> std::io::Result<()> {
+pub(crate) fn copy_dir_recursive(src: &Path, dest: &Path) -> std::io::Result<()> {
     fs::create_dir_all(dest)?;
 
     for entry in fs::read_dir(src)?.flatten() {
